@@ -1,0 +1,12 @@
+[package]
+name = "gub-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+getopts = "0.2.24"
+tokio = { version = "1.52.1", features = ["full"] }
+tokio-rustls = "0.26.4"
+gub-wire.path = "../gub-wire"
+log = "0.4.29"
