@@ -1,19 +1,16 @@
 [ca-cert]
 keyUsage = critical, keyCertSign, cRLSign
 subjectAltName = @alt_name
-# CN = Gubernator_CA
 
 [server-cert]
 keyUsage = critical, digitalSignature, keyEncipherment, keyAgreement
 extendedKeyUsage = serverAuth
 subjectAltName = @alt_name
-# CN = Gubernator_Server
 
 [client-cert]
 keyUsage = critical, digitalSignature, keyEncipherment, keyAgreement
 extendedKeyUsage = clientAuth
 subjectAltName = @alt_name
-# CN = Gubernator_Client
 
 [req]
 distinguished_name = dn

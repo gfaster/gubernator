@@ -6,7 +6,10 @@ use log::debug;
 use tokio::{io::{AsyncWriteExt, split}, net::TcpStream, sync::mpsc, time::Instant};
 use tokio_rustls::{TlsConnector, rustls::{self, RootCertStore, pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject}}};
 
+use crate::job::SystemInterface;
+
 mod logging;
+mod job;
 
 fn options() -> getopts::Options {
     let mut o = getopts::Options::new();
@@ -90,6 +93,8 @@ async fn main() -> Result<()> {
 
     logging::enable_logging(verbose);
 
+    let sysif = tokio::spawn(job::SystemInterface::new());
+
     let root_certs = tokio::task::spawn_blocking(move || {
         let mut root_certs = RootCertStore::empty();
         CertificateDer::pem_file_iter(&cert)
@@ -125,12 +130,14 @@ async fn main() -> Result<()> {
         ServerName::try_from(domain.as_str()).with_context(|| format!("invalid domain `{domain}`"))?.to_owned()
     };
 
+    let sysif = Arc::new(sysif.await??);
+
     let machine = machine.await?;
     const BASE_RETRY: Duration = Duration::from_millis(3000);
     let mut current_wait = BASE_RETRY;
     loop {
         let last_attempt = Instant::now();
-        if let Err(e) = connect_to_gubernator(connector.clone(), &addr, &domain, machine.clone()).await {
+        if let Err(e) = connect_to_gubernator(connector.clone(), &addr, &domain, machine.clone(), Arc::clone(&sysif)).await {
             eprintln!("{e:?}")
         }
         let elapsed = last_attempt.elapsed();
@@ -144,7 +151,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &ServerName<'static>, machine: MachineDescState) -> Result<()> {
+async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &ServerName<'static>, machine: MachineDescState, sysif: Arc<SystemInterface>) -> Result<()> {
     let stream = TcpStream::connect(addr).await.with_context(|| format!("failed to connect to {addr}"))?;
     let mut stream = connector.connect(domain.clone(), stream).await.map_err(|e|
         // this error is wrapped in io::Error, which makes printout worse
@@ -201,7 +208,7 @@ async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &Ser
         }
     });
     let h3 = tokio::spawn(async move {
-        if let Err(e) = scheduler(rrcv, wsnd).await {
+        if let Err(e) = scheduler(rrcv, wsnd, sysif).await {
             eprintln!("{e:?}")
         }
     });
@@ -215,7 +222,7 @@ async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &Ser
 async fn heartbeat(machine: MachineDescState, outgoing: mpsc::Sender<ClientMsg>) {
     let mut status = machine.get_status().await;
     loop {
-        debug!("sending status: {status:?}");
+        debug!("sending status: {status:.2?}");
         if outgoing.send(ClientMsg::Status(status)).await.is_err() {
             return
         }
@@ -223,17 +230,18 @@ async fn heartbeat(machine: MachineDescState, outgoing: mpsc::Sender<ClientMsg>)
     }
 }
 
-async fn scheduler(mut incoming: mpsc::Receiver<ServerMsg>, outgoing: mpsc::Sender<ClientMsg>) -> Result<()> {
+async fn scheduler(mut incoming: mpsc::Receiver<ServerMsg>, outgoing: mpsc::Sender<ClientMsg>, sysif: Arc<SystemInterface>) -> Result<()> {
     while let Some(msg) = incoming.recv().await {
         match msg {
             ServerMsg::Spawn { id, script } => {
                 let snd = outgoing.clone();
 
+                let sysif = Arc::clone(&sysif);
                 tokio::spawn(async move {
-                    let (success, code) = match run_job(id, script).await {
+                    let (success, code) = match job::run_job(&sysif, id, script).await {
                         Ok(x) => x,
                         Err(e) => {
-                            eprintln!("failed to run job {id}: {e}");
+                            eprintln!("failed to run job {id}: {e:?}");
                             (false, None)
                         },
                     };
@@ -244,12 +252,4 @@ async fn scheduler(mut incoming: mpsc::Receiver<ServerMsg>, outgoing: mpsc::Send
         }
     }
     Ok(())
-}
-
-async fn run_job(id: u64, script: String) -> Result<(bool, Option<u8>)> {
-    // TODO: actually run the script
-    debug!("Starting job {id}: {}", gub_wire::util::truncate_str_debug(&script, 40));
-    let status = tokio::process::Command::new("/usr/bin/env").arg("sleep").arg("40").status().await?;
-    debug!("Job complete {id}");
-    Ok((status.success(), status.code().map(|c| c as u8)))
 }

@@ -263,7 +263,7 @@ async fn main() -> Result<()> {
             let (mut reader, mut writer) = split(stream);
             let desc = gub_wire::recieve_msg::<_, MachineDesc>(&mut reader, &mut buf).await?;
             let (j_snd, mut j_rcv) = tokio::sync::mpsc::channel(32);
-            log::info!("new machine {peer_addr}: {desc:?}");
+            log::info!("new machine {peer_addr}: {desc:.2?}");
             let client = ClientState {
                 addr: peer_addr,
                 desc,
@@ -342,8 +342,8 @@ async fn main() -> Result<()> {
 
 
 async fn run_test_jobs(state: Arc<State>) {
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    let res = state.run_job("asdfasdfadfasdf".into(), &[MinOs {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let res = state.run_job("sleep 30; true".into(), &[MinOs {
         linux_kernel: None,
         arch: gub_wire::machine::Arch::X86_64,
         nix: gub_wire::machine::Requirement::Require,

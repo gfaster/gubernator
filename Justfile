@@ -19,27 +19,21 @@ certs:
 	}
 	
 	pushd mainCA
-	# openssl genpkey -algorithm ec -pkeyopt ec_paramgen_curve:P-256 -out ./private/ca.key
 	genpkey ./private/ca.key
 	openssl req -key ./private/ca.key -new -x509 -days 3650 -config ../client_server.cnf -extensions ca-cert -out ca.crt
-	# openssl req -key ./private/ca.key -new -x509 -days 3650 -addext \
-	# 	keyUsage=critical,keyCertSign,cRLSign -subj "/CN=Gubernator/C=US" -out ca.crt
 	chmod 600 ./private/ca.key
-	# openssl genrsa -des3 -out ./private/cakey.pem 2048
-	# openssl req -x509 -new -nodes -key ./private/cakey.pem -days 3650 -out cacert.pem
-
 	popd
+
 	genpkey ./guber.key
 	openssl req -key ./guber.key -config client_server.cnf -extensions server-cert -new -out ./guber-cert.csr
 	openssl x509 -req -in ./guber-cert.csr -CA mainCA/ca.crt -CAkey mainCA/private/ca.key -CAcreateserial -days 365 -extfile client_server.cnf -extensions server-cert -out ./guber-cert.crt
 
 
-	# openssl genrsa -out ./client.key 2048
-	# openssl req -new -out request.csr -key private.key -config openssl.cnf
 	genpkey ./client.key
 	openssl req -key ./client.key -config client_server.cnf -extensions client-cert -new -out ./client-cert.csr
 
 	openssl x509 -req -in ./client-cert.csr -CA mainCA/ca.crt -CAkey mainCA/private/ca.key -CAcreateserial -days 365 -extfile client_server.cnf -extensions client-cert -out ./client-cert.crt
+	openssl verify -CAfile mainCA/ca.crt ./client-cert.crt
 
 
 clear-certs:
