@@ -2,6 +2,7 @@ pub mod machine;
 pub mod memory;
 pub mod protocol;
 pub mod util;
+pub mod job_req;
 mod uname;
 
 pub use memory::Memory;
