@@ -1,4 +1,4 @@
-use std::{ffi::CStr, io, ops::Range};
+use std::{ffi::{CStr, c_char}, io, ops::Range};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Uname {
@@ -19,7 +19,7 @@ impl Uname {
 
         let mut buf = String::with_capacity(size_of::<libc::utsname>());
 
-        let mut add = |arr: [i8; _]| {
+        let mut add = |arr: [c_char; _]| {
             let arr = arr.map(|i| i as u8);
             let cstr = CStr::from_bytes_until_nul(arr.as_slice()).expect("uname(2) gave invalid data");
             let start = buf.len();
