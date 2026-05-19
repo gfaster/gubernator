@@ -36,10 +36,37 @@ pub struct PackageDependency {
     pub version_satisfies_any_of: Vec<PackageVersion>,
 }
 
+/// Working directory the job will be run in
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkingDir {
+    /// Straight up in the home directory. Not recommended if the job does any writes in the cwd.
+    Home,
+    /// Sets the working directory to root, so most writes will fail
+    Root,
+    /// Creates a temporary dir that will be cleaned up after exit. For potentially large dirs.
+    ManagedTempdir,
+    /// Creates a tempdir in [`std::env::temp_dir()`] that will be cleaned up after exit
+    Tempdir,
+
+    /// Corresponds to `DynamicUser` setting in `systemd.exec(5)`
+    DynamicUser,
+}
+
+pub struct Exec {
+    executable: String,
+
+}
+
 /// config of one job variant 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JobConfiguration {
     pub min_os: MinOs,
+    pub packages: Vec<PackageDependency>,
+    pub working_dir: WorkingDir,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nix_pkg: Option<String>,
+    pub exec: Vec<String>
 }
 
 
