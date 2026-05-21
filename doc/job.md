@@ -95,14 +95,27 @@ TODO: let bindings?
 We'll fully utilize XML as a markup language here (eventually). I'll be loosly
 basing it on `systemd.unit(5)`/`systemd.service(5)`.
 
+In the interest of maximizing usability with minimal admin permissions, we'll
+try to use commonly installed utilities to provide necessary components. For
+example, a build system will make it's results availiable as artifacts, served
+over 9p. If no virtualized filesystems are availiable, then future jobs wanting
+to make use of it will have to just manually copy it over with userspace 9p.
+Alternatively, if availiable, it can be mounted through FUSE, or if we have the
+relevant capabilities, v9fs.
+
+This requires the capacity to specify the qualities we expect of artifacts. Do
+they need to be downloaded in full? Do they need to be made availiable for a
+long time? Are they big enough that we just want to keep them on their original
+block device?
+
 ```xml
 <job_desc>
     <type>exec</type>
 
     <exec_start>
         <exec>cargo</exec>
-        <exec>build</exec>
-        <exec>--release</exec>
+        <arg>build</arg>
+        <arg>--release</arg>
     </exec_start>
 
     <working_dir>
