@@ -1,4 +1,4 @@
-## Goals
+# Goals
 
 The primary use-case is for CI/build systems and self-hosted services
 
@@ -10,6 +10,7 @@ The goals of Gubernator, broadly, are as follows:
 3. Be a good system citizen: don't require virtual machines images, admin permissions, or multi-gigabyte dedicated package managers
 4. Facilitate cluster-agnostic jobs for portable-ish configurations
 5. Act as primarily a back-end for specialized generators
+6. Keep client implementation flexible enough to implement on anything
 
 The secondary goals (wishlist) are, in no particular order:
 
@@ -97,6 +98,18 @@ steps. The generator for a more complex and complete CI/CD system might instead
 be written in [KDL](https://kdl.dev/) augmented with semantics.
 
 
+### Keep client implementation flexible
+
+This might be more of a stretch goal, but it's something I'll have to keep in
+mind the whole time. I want the implementation of a node daemon to be flexible
+enough to write on any machine that satisfies all of the following:
+
+1. Can make a TCP/TLS connection
+2. Has an XML parser
+3. Can spawn child processes
+
+I want more powerful capabilities for certain systems that allow it (mounting,
+jails, vms, etc.), but there is still potential value without it.
 
 ## What does Gubernator not care about?
 

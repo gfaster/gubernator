@@ -1,4 +1,4 @@
-This document serves as both explanation and brainstorming
+This document serves as both explanation and brainstorming.
 
 # Jobs
 
