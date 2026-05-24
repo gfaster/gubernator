@@ -4,6 +4,7 @@ pub mod protocol;
 pub mod util;
 pub mod job_req;
 mod uname;
+pub mod sel_expr;
 
 pub use memory::Memory;
 pub use protocol::*;

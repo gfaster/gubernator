@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::machine::MinOs;
+use crate::sel_expr::MachineSel;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,13 +55,12 @@ pub enum WorkingDir {
 
 pub struct Exec {
     executable: String,
-
 }
 
 /// config of one job variant 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JobConfiguration {
-    pub min_os: MinOs,
+    pub machine_sel: MachineSel,
     pub packages: Vec<PackageDependency>,
     pub working_dir: WorkingDir,
     #[serde(skip_serializing_if = "Option::is_none")]

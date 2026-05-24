@@ -18,14 +18,23 @@ impl OsRelease {
     fn new() -> std::io::Result<Self> {
         // https://www.freedesktop.org/software/systemd/man/latest/os-release.html
         // https://www.linux.org/docs/man5/os-release.html
-        let mut f = match std::fs::read_to_string("/etc/os-release") {
-            Ok(x) => x,
+        let os_rel = match std::fs::read_to_string("/etc/os-release") {
+            Ok(x) => Some(x),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::read_to_string("/usr/lib/os-release")?
+                std::fs::read_to_string("/usr/lib/os-release").ok()
             },
+            // I'm not sure if it's appropriate to fully error out here
             Err(e) => return Err(e)
-        };
-        f += &std::fs::read_to_string("/etc/lsb-release")?;
+        }.unwrap_or_default();
+
+        let lsb_rel = match std::fs::read_to_string("/etc/lsb-release") {
+            Ok(x) => Some(x),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::read_to_string("/usr/lib/lsb-release").ok()
+            },
+            // I'm not sure if it's appropriate to fully error out here
+            Err(e) => return Err(e)
+        }.unwrap_or_default();
 
         let mut pretty_name = None;
         let mut name = None;
@@ -33,7 +42,7 @@ impl OsRelease {
         let mut version = None;
         let mut id = None;
 
-        for line in f.lines() {
+        for line in os_rel.lines().chain(lsb_rel.lines()) {
             let line = line.trim();
             if line.starts_with('#') {
                 continue
@@ -53,7 +62,11 @@ impl OsRelease {
                 _ => continue
             };
 
-            *tgt = Some(val.to_string())
+            // since we also iterate over lsb-release if it exists, we want to whatever comes first
+            // to take precidence
+            if tgt.is_none() {
+                *tgt = Some(val.to_string())
+            }
         }
 
         let default_name = || {
@@ -161,173 +174,6 @@ impl Requirement {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub enum SelExprFailKind {
-    #[default]
-    Nothing,
-    Explain,
-    Warn,
-    Ignore,
-}
-
-pub struct SelExpr {
-    fail: SelExprFailKind,
-    kind: SelExprKind
-}
-
-pub enum SelExprKind {
-    AnyOf(Vec<SelExpr>),
-    AllOf(Vec<SelExpr>),
-}
-
-pub struct MachineSel {
-    predicates: Vec<SelExpr>,
-}
-
-/// Represents the minimum needed for a configuration. Can use a slice to represent preference.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MinOs {
-    pub linux_kernel: Option<(u8, u8, u8)>,
-    pub arch: Arch,
-    /// Forbid means no nixos
-    pub nix: Requirement,
-    pub min_mem: Memory,
-    /// additional requirement on top of min_mem
-    pub peak_mem: Memory,
-    pub peak_mem_can_be_swap: bool,
-    pub threads: NonZero<u16>,
-    pub avail_cpu: NonZero<u64>,
-}
-
-impl MinOs {
-    pub fn satisfied(&self, desc: &MachineDesc, status: &MachineStatus) -> bool {
-        let MachineDesc {
-            ref os,
-            arch,
-            ram,
-            swap,
-            threads,
-        } = *desc;
-
-        let MachineStatus {
-            mem_used,
-            avg_avail_cpu,
-        } = *status;
-
-        self.arch == arch
-            && mem_used + self.min_mem <= ram // can fit min mem in ram
-            && if self.peak_mem_can_be_swap {
-                mem_used + self.min_mem + self.peak_mem <= ram + swap
-            } else {
-                mem_used + self.min_mem + self.peak_mem <= ram
-            }
-            && self.avail_cpu.get() <= avg_avail_cpu
-            && self.threads.get() <= threads
-            && match os {
-                &Os::Linux {
-                    kernel,
-                    has_nix,
-                    distro: _,
-                } => {
-                    self.linux_kernel.is_none_or(|req_k| req_k <= kernel) && self.nix.check(has_nix)
-                }
-            }
-    }
-
-    pub fn satisfied_reason(&self, desc: &MachineDesc, status: &MachineStatus) -> impl fmt::Display {
-        fmt::from_fn(move |f| {
-            let MachineDesc {
-                ref os,
-                arch,
-                ram,
-                swap,
-                threads,
-            } = *desc;
-
-            let MachineStatus {
-                mem_used,
-                avg_avail_cpu,
-            } = *status;
-
-            let mut issue_cnt = 0;
-            let mut reason_ = |s: fmt::Arguments| {
-                if issue_cnt != 0 {
-                    f.write_str(" and ")?;
-                }
-                issue_cnt += 1;
-                f.write_fmt(s)
-            };
-
-            macro_rules! reason {
-                ($($tt:tt)*) => {
-                    reason_(format_args!($($tt)*))
-                };
-            }
-
-            macro_rules! check {
-                ($val:expr, $have:expr, $valname:literal $(,)?) => {{
-                    let req__: Requirement = $val;
-                    let have__: bool = $have;
-                    match req__ {
-                        Requirement::Require if !have__ => reason!("missing required feature {}", $valname),
-                        Requirement::Forbid if have__ => reason!("has disallowed feature {}", $valname),
-                        _ => Ok(())
-                    }
-                }};
-            }
-
-            if self.arch != arch {
-                return reason!("arch mismatch")
-            }
-
-
-            if mem_used + self.min_mem > ram {
-                reason!("can't fit minimum mem ({min:.2?}) in ram ({mem_used:.2?}/{ram:.2?})", min = self.min_mem)?;
-            } else {
-                let peak = self.peak_mem + self.min_mem;
-                if self.peak_mem_can_be_swap && mem_used + self.min_mem + self.peak_mem > ram + swap {
-                    reason!("can't fit peak mem ({peak:.2?}) in ram + swap ({mem_used:.2?}/{full:.2?})", full = ram + swap)?;
-                } else if mem_used + self.min_mem + self.peak_mem > ram {
-                    reason!("can't fit peak mem ({peak:.2?}) in ram ({mem_used:.2?}/{ram:.2?})")?;
-                }
-            }
-
-            if self.avail_cpu.get() > avg_avail_cpu {
-                reason!("want {} cpu timeslices but only {avg_avail_cpu} are availiable", self.avail_cpu)?;
-            }
-
-            if self.threads.get() > threads {
-                reason!("want {} cpu threads but only {threads} exist", self.threads)?;
-            }
-
-            match os {
-                &Os::Linux {
-                    kernel,
-                    has_nix,
-                    distro: _,
-                } => {
-
-                    if let Some(req_k @ (ra, ri, rp)) = self.linux_kernel && req_k > kernel {
-                        let (ha, hi, hp) = kernel;
-                        reason!("linux kernel is too old ({ha}.{hi}.{hp} is not at least {ra}.{ri}.{rp})")?;
-                    }
-
-                    check!(self.nix, has_nix, "nix packages")?;
-                }
-            }
-
-            if issue_cnt != 0 {
-                return Ok(())
-            }
-            
-            if self.satisfied(desc, status) {
-                Ok(())
-            } else {
-                write!(f, "<BUG> not satisfied but found no reasons")
-            }
-        })
-    }
-}
 
 /// machine description message
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -413,7 +259,7 @@ impl MachineDescState {
         let (sys, desc) = tokio::task::block_in_place(|| {
             let sys = sysinfo::System::new_with_specifics(Self::tracked());
             let uname = crate::uname::uname();
-            let os = Os::current(&uname);
+            let os = OsRelease::new().unwrap();
             let arch = match uname.machine() {
                 "x86_64" => Arch::X86_64,
                 a => panic!("unknown arch: {a}")

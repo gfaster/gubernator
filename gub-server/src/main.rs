@@ -4,7 +4,7 @@ use std::{
 
 
 use anyhow::{Context, Result};
-use gub_wire::{Memory, ServerMsg, machine::{MachineDesc, MachineStatus, MinOs}, protocol::ClientMsg};
+use gub_wire::{Memory, ServerMsg, machine::{MachineDesc, MachineStatus}, protocol::ClientMsg};
 use log::debug;
 use tokio::{io::split, net::TcpListener, sync::oneshot, time::Instant};
 use tokio_rustls::{
@@ -170,50 +170,50 @@ impl State {
         let _ = ch.send(done);
     }
 
-    async fn run_job(&self, job: String, valid: &[MinOs]) -> Result<JobDone> {
-        debug!("want to run job on: {valid:?}");
-        let machs = self.get_machines();
-        let m = machs
-            .iter()
-            .filter_map(|m| {
-                valid
-                    .iter()
-                    .position(|req| {
-                        let status = { m.mstate.lock().unwrap().status.clone() };
-                        req.satisfied(&m.desc, &status)
-                    })
-                    .map(|m_idx| (m_idx, m))
-            })
-            .fold(None, |acc, (prio, m)| {
-                acc.filter(|&(p_prio, _)| prio < p_prio).or(Some((prio, m)))
-            })
-            .context("no satisfactory machines")
-            .with_context(|| {
-                std::fmt::from_fn(|f| {
-                    f.debug_list().entries(valid.iter().enumerate().map(|(i, req)| {
-                        let machs = Arc::clone(&machs);
-                        std::fmt::from_fn(move |f| {
-                            write!(f, "req[{i}] not met because ")?;
-                            f.debug_list().entries(machs.iter().map(|m| 
-                                std::fmt::from_fn(|f| write!(f, "machine {} {}", m.addr, req.satisfied_reason(&m.desc, &m.get_status())))
-                            )).finish()
-                        })
-                    })).finish()
-                }).to_string()
-            })?.1;
-
-        let id = self.id_cnt.fetch_add(1, Ordering::Relaxed);
-
-        let (snd, recv) = oneshot::channel();
-
-        {
-            let mut lock = self.jobs.lock().unwrap();
-            lock.insert(id, snd);
-        }
-
-        m.jobs.send(JobDesc { id, job }).await?;
-        Ok(recv.await?)
-    }
+    // async fn run_job(&self, job: String, valid: &[MinOs]) -> Result<JobDone> {
+    //     debug!("want to run job on: {valid:?}");
+    //     let machs = self.get_machines();
+    //     let m = machs
+    //         .iter()
+    //         .filter_map(|m| {
+    //             valid
+    //                 .iter()
+    //                 .position(|req| {
+    //                     let status = { m.mstate.lock().unwrap().status.clone() };
+    //                     req.satisfied(&m.desc, &status)
+    //                 })
+    //                 .map(|m_idx| (m_idx, m))
+    //         })
+    //         .fold(None, |acc, (prio, m)| {
+    //             acc.filter(|&(p_prio, _)| prio < p_prio).or(Some((prio, m)))
+    //         })
+    //         .context("no satisfactory machines")
+    //         .with_context(|| {
+    //             std::fmt::from_fn(|f| {
+    //                 f.debug_list().entries(valid.iter().enumerate().map(|(i, req)| {
+    //                     let machs = Arc::clone(&machs);
+    //                     std::fmt::from_fn(move |f| {
+    //                         write!(f, "req[{i}] not met because ")?;
+    //                         f.debug_list().entries(machs.iter().map(|m| 
+    //                             std::fmt::from_fn(|f| write!(f, "machine {} {}", m.addr, req.satisfied_reason(&m.desc, &m.get_status())))
+    //                         )).finish()
+    //                     })
+    //                 })).finish()
+    //             }).to_string()
+    //         })?.1;
+    //
+    //     let id = self.id_cnt.fetch_add(1, Ordering::Relaxed);
+    //
+    //     let (snd, recv) = oneshot::channel();
+    //
+    //     {
+    //         let mut lock = self.jobs.lock().unwrap();
+    //         lock.insert(id, snd);
+    //     }
+    //
+    //     m.jobs.send(JobDesc { id, job }).await?;
+    //     Ok(recv.await?)
+    // }
 }
 
 #[tokio::main]
@@ -343,16 +343,16 @@ async fn main() -> Result<()> {
 
 async fn run_test_jobs(state: Arc<State>) {
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let res = state.run_job("sleep 30; true".into(), &[MinOs {
-        linux_kernel: None,
-        arch: gub_wire::machine::Arch::X86_64,
-        nix: gub_wire::machine::Requirement::Require,
-        min_mem: Memory::from_mebibytes(4),
-        peak_mem: Memory::from_mebibytes(100),
-        peak_mem_can_be_swap: true,
-        threads: const { NonZero::new(1).unwrap() },
-        avail_cpu: const { NonZero::new(100).unwrap() },
-    }]).await;
+    // let res = state.run_job("sleep 30; true".into(), &[MinOs {
+    //     linux_kernel: None,
+    //     arch: gub_wire::machine::Arch::X86_64,
+    //     nix: gub_wire::machine::Requirement::Require,
+    //     min_mem: Memory::from_mebibytes(4),
+    //     peak_mem: Memory::from_mebibytes(100),
+    //     peak_mem_can_be_swap: true,
+    //     threads: const { NonZero::new(1).unwrap() },
+    //     avail_cpu: const { NonZero::new(100).unwrap() },
+    // }]).await;
 
-    let _ = eprintln!("{res:?}");
+    // let _ = eprintln!("{res:?}");
 }
