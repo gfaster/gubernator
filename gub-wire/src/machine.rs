@@ -1,32 +1,106 @@
-use std::{fmt, num::NonZero, sync::Arc};
+use std::{fmt, num::NonZero, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::{Mutex, MutexGuard}, time::{Duration, Instant}};
 
-use crate::{Memory, uname::Uname};
+use crate::{Memory, uname};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum Os {
-    Linux {
-        kernel: (u8, u8, u8),
-        has_nix: bool,
-        distro: String,
-    },
+pub struct OsRelease {
+    pub name: String,
+    pub id: String,
+    pub pretty_name: String,
+    pub version_id: Option<String>,
+    pub version: Option<String>,
 }
 
-impl Os {
-    fn current(uname: &Uname) -> Self {
-        assert_eq!(uname.sysname(), "Linux");
-        let mut it = uname.release().split('.').flat_map(|i| i.parse().ok());
-        let kernel = (
-            it.next().unwrap_or_default(),
-            it.next().unwrap_or_default(),
-            it.next().unwrap_or_default(),
-        );
+impl OsRelease {
+    fn new() -> std::io::Result<Self> {
+        // https://www.freedesktop.org/software/systemd/man/latest/os-release.html
+        // https://www.linux.org/docs/man5/os-release.html
+        let mut f = match std::fs::read_to_string("/etc/os-release") {
+            Ok(x) => x,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::read_to_string("/usr/lib/os-release")?
+            },
+            Err(e) => return Err(e)
+        };
+        f += &std::fs::read_to_string("/etc/lsb-release")?;
 
-        // TODO: fill out these fields
-        let distro = String::from("<unknown>");
-        Os::Linux { kernel, has_nix: true, distro }
+        let mut pretty_name = None;
+        let mut name = None;
+        let mut version_id = None;
+        let mut version = None;
+        let mut id = None;
+
+        for line in f.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue
+            }
+            let Some((key, val)) = line.split_once("=") else {
+                continue
+            };
+
+            let val = val.trim_start();
+            let val = val.trim_matches('"');
+            let tgt = match key {
+                "PRETTY_NAME" => &mut pretty_name,
+                "NAME" => &mut name,
+                "VERSION_ID" => &mut version_id,
+                "VERSION" => &mut version,
+                "ID" => &mut id,
+                _ => continue
+            };
+
+            *tgt = Some(val.to_string())
+        }
+
+        let default_name = || {
+            if cfg!(target_os = "linux") {
+                "Linux".into()
+            } else if cfg!(target_os = "freebsd") {
+                "FreeBSD".into()
+            } else {
+                // even the freebsd man page defaults cites the above linux.org page as the
+                // cannonical spec which says to default to Linux. That doesn't seem like a
+                // good idea here.
+                todo!("support {} default os-release NAME/PRETTY_NAME", std::env::consts::OS)
+            }
+        };
+
+        Ok(Self {
+            name: name.unwrap_or_else(default_name),
+            pretty_name: pretty_name.unwrap_or_else(default_name),
+            version_id,
+            version,
+            id: id.unwrap_or_else(|| std::env::consts::OS.into()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Uname {
+    pub name: String,
+    pub machine: Arch,
+    pub release: String,
+    pub version: String,
+    pub operating_system: String,
+    pub nodename: String,
+}
+
+impl TryFrom<&uname::Uname> for Uname {
+    type Error = ArchParseErr;
+
+    fn try_from(value: &uname::Uname) -> Result<Self, ArchParseErr> {
+        Ok(Self {
+            name: value.sysname().into(),
+            machine: value.machine().parse()?,
+            release: value.machine().into(),
+            version: value.version().into(),
+            operating_system: value.sysname().into(),
+            nodename: value.nodename().into()
+        })
     }
 }
 
@@ -35,6 +109,29 @@ impl Os {
 pub enum Arch {
     X86_64,
     Arm64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchParseErr;
+
+impl std::fmt::Display for ArchParseErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid architecture")
+    }
+}
+
+impl std::error::Error for ArchParseErr {}
+
+impl FromStr for Arch {
+    type Err = ArchParseErr;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "x86_64" | "x64" => Ok(Arch::X86_64),
+            "arm64" => Ok(Arch::Arm64),
+            _ => Err(ArchParseErr)
+        }
+    }
 }
 
 /// machine status message used for heartbeats and basic usage data
@@ -62,6 +159,29 @@ impl Requirement {
             Requirement::Forbid => !there,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SelExprFailKind {
+    #[default]
+    Nothing,
+    Explain,
+    Warn,
+    Ignore,
+}
+
+pub struct SelExpr {
+    fail: SelExprFailKind,
+    kind: SelExprKind
+}
+
+pub enum SelExprKind {
+    AnyOf(Vec<SelExpr>),
+    AllOf(Vec<SelExpr>),
+}
+
+pub struct MachineSel {
+    predicates: Vec<SelExpr>,
 }
 
 /// Represents the minimum needed for a configuration. Can use a slice to represent preference.
@@ -212,7 +332,7 @@ impl MinOs {
 /// machine description message
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MachineDesc {
-    pub os: Os,
+    pub os: OsRelease,
     pub arch: Arch,
     pub ram: Memory,
     pub swap: Memory,

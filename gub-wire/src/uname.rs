@@ -47,7 +47,6 @@ impl Uname {
         self.gets(&self.sysname)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn nodename(&self) -> &str {
         self.gets(&self.nodename)
     }

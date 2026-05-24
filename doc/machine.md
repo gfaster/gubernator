@@ -45,7 +45,11 @@ about its running jobs
         <!-- TODO: figure out what should go here -->
     </cpu>
 
-    <memory>15656MiB</memory>
+    <memory>
+        <!-- TODO: numa? -->
+        <ram>15656MiB</ram>
+        <swap>1024MiB</swap>
+    </memory>
 
     <!-- note: using unicode homoglyphs in commands because xml comments -->
     <!-- run dpkg −−query -->
