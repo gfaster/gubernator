@@ -1,6 +1,6 @@
 use std::{ffi::{CStr, c_char}, io, ops::Range};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Uname {
     buf: String,
     sysname: Range<u16>,
@@ -17,6 +17,7 @@ impl Uname {
             panic!("uname failed {}", io::Error::last_os_error())
         }
 
+        const { assert!(size_of::<libc::utsname>() < u16::MAX as usize) }
         let mut buf = String::with_capacity(size_of::<libc::utsname>());
 
         let mut add = |arr: [c_char; _]| {
@@ -55,7 +56,6 @@ impl Uname {
         self.gets(&self.release)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn version(&self) -> &str {
         self.gets(&self.version)
     }
@@ -65,6 +65,39 @@ impl Uname {
     }
 }
 
+impl std::fmt::Debug for Uname {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f
+            .debug_struct("Uname")
+            .field("sysname", &self.sysname())
+            .field("nodename", &self.nodename())
+            .field("release", &self.release())
+            .field("version", &self.version())
+            .field("machine", &self.machine())
+            .finish()
+    }
+}
+
+impl PartialEq for Uname {
+    fn eq(&self, other: &Self) -> bool {
+        self.sysname() == other.sysname()
+        && self.nodename() == other.nodename()
+        && self.release() == other.release()
+        && self.version() == other.version()
+        && self.machine() == other.machine()
+    }
+}
+
 pub fn uname() -> Uname {
     Uname::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke() {
+        dbg!(uname());
+    }
 }

@@ -73,3 +73,11 @@ pub fn truncate_str_debug(s: &str, len: usize) -> impl fmt::Debug + fmt::Display
         write!(t, "{s:?}")
     })
 }
+
+pub fn truncate_debug(s: impl fmt::Debug, len: usize) -> impl fmt::Debug + fmt::Display {
+    fmt::from_fn(move |f| {
+        use fmt::Write;
+        let mut t = Truncate::new(f, len);
+        write!(t, "{s:?}")
+    })
+}

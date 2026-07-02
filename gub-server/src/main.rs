@@ -1,10 +1,10 @@
 use std::{
-    collections::BTreeMap, ffi::OsStr, net::SocketAddr, num::NonZero, path::PathBuf, sync::{Arc, atomic::*}, time::{Duration, SystemTime}
+    collections::BTreeMap, ffi::OsStr, net::SocketAddr, path::PathBuf, sync::{Arc, atomic::*}, time::{Duration, SystemTime}
 };
 
 
 use anyhow::{Context, Result};
-use gub_wire::{Memory, ServerMsg, machine::{MachineDesc, MachineStatus}, protocol::ClientMsg};
+use gub_wire::{ServerMsg, job_req::{Exec, JobDescription, JobDispatch, WorkingDir}, machine::{MachineDesc, MachineStatus}, protocol::ClientMsg, sel_expr::MachineSel};
 use log::debug;
 use tokio::{io::split, net::TcpListener, sync::oneshot, time::Instant};
 use tokio_rustls::{
@@ -114,20 +114,25 @@ fn make_config(opts: &Opts) -> Result<Arc<ServerConfig>> {
 
 #[derive(Debug)]
 struct JobDone {
+    nodename: String,
     success: bool,
     code: Option<u8>,
 }
 
-#[derive(Debug)]
-struct JobDesc {
+struct JobDispatchMsg {
     id: u64,
-    job: String,
+    dispatch: JobDispatch,
+}
+
+struct JobWaitMsg {
+    id: u64,
+    response: oneshot::Sender<JobDone>,
 }
 
 struct ClientState {
     addr: SocketAddr,
     desc: MachineDesc,
-    jobs: tokio::sync::mpsc::Sender<JobDesc>,
+    jobs: tokio::sync::mpsc::Sender<JobDispatchMsg>,
     mstate: StdMutex<MutableClientState>,
 }
 
@@ -163,57 +168,37 @@ impl State {
     }
 
     fn send_done(&self, id: u64, done: JobDone) {
-        let mut lock = self.jobs.lock().unwrap();
-        let Some(ch) = lock.remove(&id) else {
+        let ch = {
+            self.jobs.lock().unwrap().remove(&id)
+        };
+        let Some(ch) = ch else {
+            // TODO: should I warn here?
             return
         };
         let _ = ch.send(done);
     }
 
-    // async fn run_job(&self, job: String, valid: &[MinOs]) -> Result<JobDone> {
-    //     debug!("want to run job on: {valid:?}");
-    //     let machs = self.get_machines();
-    //     let m = machs
-    //         .iter()
-    //         .filter_map(|m| {
-    //             valid
-    //                 .iter()
-    //                 .position(|req| {
-    //                     let status = { m.mstate.lock().unwrap().status.clone() };
-    //                     req.satisfied(&m.desc, &status)
-    //                 })
-    //                 .map(|m_idx| (m_idx, m))
-    //         })
-    //         .fold(None, |acc, (prio, m)| {
-    //             acc.filter(|&(p_prio, _)| prio < p_prio).or(Some((prio, m)))
-    //         })
-    //         .context("no satisfactory machines")
-    //         .with_context(|| {
-    //             std::fmt::from_fn(|f| {
-    //                 f.debug_list().entries(valid.iter().enumerate().map(|(i, req)| {
-    //                     let machs = Arc::clone(&machs);
-    //                     std::fmt::from_fn(move |f| {
-    //                         write!(f, "req[{i}] not met because ")?;
-    //                         f.debug_list().entries(machs.iter().map(|m| 
-    //                             std::fmt::from_fn(|f| write!(f, "machine {} {}", m.addr, req.satisfied_reason(&m.desc, &m.get_status())))
-    //                         )).finish()
-    //                     })
-    //                 })).finish()
-    //             }).to_string()
-    //         })?.1;
-    //
-    //     let id = self.id_cnt.fetch_add(1, Ordering::Relaxed);
-    //
-    //     let (snd, recv) = oneshot::channel();
-    //
-    //     {
-    //         let mut lock = self.jobs.lock().unwrap();
-    //         lock.insert(id, snd);
-    //     }
-    //
-    //     m.jobs.send(JobDesc { id, job }).await?;
-    //     Ok(recv.await?)
-    // }
+    async fn run_job(&self, req: &JobDescription) -> Result<Vec<JobDone>> {
+        let machs = self.get_machines();
+
+        let mut js = tokio::task::JoinSet::new();
+        let mut filter = req.machine_sel.validate_machines_filter();
+        for m in machs.iter().filter(|m| filter(&m.desc)) {
+            let (snd, recv) = oneshot::channel();
+            let id = self.id_cnt.fetch_add(1, Ordering::Relaxed);
+            {
+                self.jobs.lock().unwrap().insert(id, snd);
+            }
+            m.jobs.send(JobDispatchMsg { id, dispatch: JobDispatch { working_dir: req.working_dir.clone(), exec: req.exec.clone() } }).await?;
+            js.spawn(recv);
+        }
+
+        let mut ret = Vec::with_capacity(js.len());
+        while let Some(done) = js.join_next().await {
+            ret.push(done??);
+        }
+        Ok(ret)
+    }
 }
 
 #[tokio::main]
@@ -280,14 +265,17 @@ async fn main() -> Result<()> {
             let sstate = Arc::clone(&state);
             tokio::spawn(async move {
                 let mut buf = Vec::new();
-                while let Some(job) = j_rcv.recv().await {
-                    let msg = ServerMsg::Spawn { id: job.id, script: job.job };
+                while let Some(JobDispatchMsg { id, dispatch }) = j_rcv.recv().await {
+                    let msg = ServerMsg::Job { 
+                        id,
+                        dispatch
+                    };
                     if let Err(e) = gub_wire::send_msg(&mut writer, &mut buf, &msg).await {
                         eprintln!("{e}");
 
                         // try to record that we're not getting anything more here
                         // TODO: this isn't quite right...
-                        sstate.send_done(job.id, JobDone { success: false, code: None });
+                        sstate.send_done(id, JobDone { success: false, code: None, nodename: client.desc.uname.nodename.clone() });
 
                         // hard to recover here
                         break
@@ -310,20 +298,26 @@ async fn main() -> Result<()> {
                         },
                     };
 
+                    let nodename = &*rclient.desc.uname.nodename;
+                    let name = format_args!("{nodename} ({})", rclient.addr);
                     match msg {
                         ClientMsg::JobDone { id, success, code } => {
-                            state.send_done(id, JobDone { success, code });
+                            debug!("job {id} finished on {name}: success={success} code={code:?}");
+                            state.send_done(id, JobDone { success, code, nodename: nodename.into() });
                             rclient.mstate.lock().unwrap().last_heard_from = Instant::now();
                         },
                         ClientMsg::Status(machine_status) => {
+                            debug!("status update from {name}: {machine_status:?}");
                             let mut lock = rclient.mstate.lock().unwrap();
                             lock.status = machine_status;
                             lock.last_heard_from = Instant::now();
                         },
                         ClientMsg::Shutdown => {
+                            let now = SystemTime::now();
+                            debug!("status update from {name}: shutting down at {now:?}");
                             let mut lock = rclient.mstate.lock().unwrap();
                             lock.last_heard_from = Instant::now();
-                            lock.shutdown = Some(SystemTime::now());
+                            lock.shutdown = Some(now);
                         },
                     }
                 }
@@ -343,16 +337,13 @@ async fn main() -> Result<()> {
 
 async fn run_test_jobs(state: Arc<State>) {
     tokio::time::sleep(Duration::from_secs(1)).await;
-    // let res = state.run_job("sleep 30; true".into(), &[MinOs {
-    //     linux_kernel: None,
-    //     arch: gub_wire::machine::Arch::X86_64,
-    //     nix: gub_wire::machine::Requirement::Require,
-    //     min_mem: Memory::from_mebibytes(4),
-    //     peak_mem: Memory::from_mebibytes(100),
-    //     peak_mem_can_be_swap: true,
-    //     threads: const { NonZero::new(1).unwrap() },
-    //     avail_cpu: const { NonZero::new(100).unwrap() },
-    // }]).await;
 
-    // let _ = eprintln!("{res:?}");
+    let job = JobDescription { 
+        machine_sel: MachineSel::single_node(["marisa", "reimu"]),
+        working_dir: WorkingDir::Home,
+        exec: Exec::bash_script("sleep 3")
+    };
+    let res = state.run_job(&job).await;
+
+    let _ = eprintln!("{res:?}");
 }

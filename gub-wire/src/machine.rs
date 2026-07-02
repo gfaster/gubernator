@@ -1,9 +1,12 @@
-use std::{fmt, num::NonZero, str::FromStr, sync::Arc};
+use std::{collections::HashMap, fmt, hash::Hash, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::{Mutex, MutexGuard}, time::{Duration, Instant}};
 
 use crate::{Memory, uname};
+
+mod find_packages;
+mod package_serde;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OsRelease {
@@ -98,7 +101,6 @@ pub struct Uname {
     pub machine: Arch,
     pub release: String,
     pub version: String,
-    pub operating_system: String,
     pub nodename: String,
 }
 
@@ -109,9 +111,8 @@ impl TryFrom<&uname::Uname> for Uname {
         Ok(Self {
             name: value.sysname().into(),
             machine: value.machine().parse()?,
-            release: value.machine().into(),
+            release: value.release().into(),
             version: value.version().into(),
-            operating_system: value.sysname().into(),
             nodename: value.nodename().into()
         })
     }
@@ -127,7 +128,7 @@ pub enum Arch {
 #[derive(Debug, Clone)]
 pub struct ArchParseErr;
 
-impl std::fmt::Display for ArchParseErr {
+impl fmt::Display for ArchParseErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("invalid architecture")
     }
@@ -178,13 +179,13 @@ impl Requirement {
 /// machine description message
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MachineDesc {
+    pub packages: Arc<InstalledPackages>,
     pub os: OsRelease,
-    pub arch: Arch,
+    pub uname: Uname,
     pub ram: Memory,
     pub swap: Memory,
     pub threads: u16,
 }
-
 
 
 
@@ -255,24 +256,178 @@ impl MachineDescState {
         self.inner.lock().await.desc.clone()
     }
 
-    pub fn new() -> Self {
-        let (sys, desc) = tokio::task::block_in_place(|| {
+    pub async fn new() -> Self {
+        let packages = Arc::new(find_packages::find_packages().await);
+        let (sys, desc) = {
             let sys = sysinfo::System::new_with_specifics(Self::tracked());
             let uname = crate::uname::uname();
             let os = OsRelease::new().unwrap();
-            let arch = match uname.machine() {
-                "x86_64" => Arch::X86_64,
-                a => panic!("unknown arch: {a}")
-            };
+            let uname = (&uname).try_into().unwrap();
             let desc = MachineDesc {
+                packages,
                 os,
-                arch,
+                uname,
                 ram: Memory::from_bytes(sys.total_memory()),
                 swap: Memory::from_bytes(sys.total_swap()),
                 threads: sys.cpus().len().try_into().unwrap_or(u16::MAX),
             };
             (sys, desc)
-        });
+        };
         Self { inner: Arc::new(Mutex::new(MachineDescStateInner { last_update: Instant::now(), sys, desc })) }
+    }
+}
+
+
+
+#[derive(Default, Deserialize)]
+#[serde(from = "package_serde::PackagesWire")]
+pub struct InstalledPackages {
+    // TODO: replace internals with hashbrown hashtables to reduce duplicate allocs
+
+    managers: Vec<String>,
+    pkgs: Vec<PackageInner>,
+    pkgs_by_name: HashMap<String, Vec<usize>>,
+
+    /// first element of tuple is index into `managers`
+    pkgs_by_manager: HashMap<String, (usize, Vec<usize>)>,
+}
+
+impl InstalledPackages {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn _add<'a>(&'a mut self, name: String, manager: &str, version: String) -> Package<'a> {
+        let pkg_idx = self.pkgs.len();
+        let manager_idx = 'mgr: {
+            // package managers don't get added too often, so don't use entry api
+            if let Some(&mut (mgr_idx, ref mut mgr)) = self.pkgs_by_manager.get_mut(manager) {
+                mgr.push(pkg_idx);
+                break 'mgr mgr_idx
+            }
+
+            let mgr_idx = self.managers.len();
+            self.managers.push(manager.into());
+            self.pkgs_by_manager.insert(manager.into(), (mgr_idx, vec![pkg_idx]));
+            mgr_idx
+        };
+
+        self.pkgs_by_name.entry(name.clone()).or_default().push(pkg_idx);
+
+        self.pkgs.push(PackageInner { manager_idx, name, version });
+        Package { container: self, inner: &self.pkgs[pkg_idx] }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Package<'_>> {
+        self.pkgs.iter().map(|inner| Package { container: self, inner })
+    }
+
+    pub fn add<'a>(&'a mut self, name: impl AsRef<str>, manager: impl AsRef<str>, version: impl AsRef<str>) -> Package<'a> {
+        // do as_ref().into() to try to help the optimizer eliminate string allocations while
+        // keeping a nice UI
+        self._add(name.as_ref().into(), manager.as_ref(), version.as_ref().into())
+    }
+
+    fn get_inner<'a>(&'a self, name: &str, version_test: impl Fn(&str) -> bool) -> Option<Package<'a>> {
+        let versions = self.pkgs_by_name.get(name)?;
+        let idx = versions.iter().copied().find(|&i| version_test(&self.pkgs[i].version))?;
+        Some(Package { container: self, inner: &self.pkgs[idx] })
+    }
+
+    pub fn get_any_version(&self, name: impl AsRef<str>) -> Option<Package<'_>> {
+        self.get_inner(name.as_ref(), |_| true)
+    }
+
+    pub fn get(&self, name: impl AsRef<str>, version: impl AsRef<str>) -> Option<Package<'_>> {
+        let version = version.as_ref();
+        self.get_inner(name.as_ref(), |v| v == version)
+    }
+}
+
+struct PackageInner {
+    manager_idx: usize,
+    name: String,
+    version: String,
+}
+
+pub struct Package<'a> {
+    container: &'a InstalledPackages,
+    inner: &'a PackageInner,
+}
+
+impl<'a> Package<'a> {
+    pub fn manager(&self) -> &'a str {
+        &self.container.managers[self.inner.manager_idx]
+    }
+
+    pub fn name(&self) -> &'a str {
+        &self.inner.name
+    }
+
+    pub fn version(&self) -> &'a str {
+        &self.inner.version
+    }
+
+    /// for equality and hashing
+    fn fields(&self) -> [&'a str; 3] {
+        // roughly ordered by likelihood different
+        [
+            self.name(),
+            self.version(),
+            self.manager(),
+        ]
+    }
+}
+
+impl Hash for Package<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fields().hash(state);
+    }
+}
+
+impl PartialEq for Package<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields() == other.fields()
+    }
+}
+
+impl Eq for Package<'_> {}
+
+impl fmt::Debug for Package<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Package")
+            .field("name", &self.name())
+            .field("version", &self.version())
+            .field("manager", &self.manager())
+            .finish()
+    }
+}
+
+impl fmt::Debug for InstalledPackages {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Packages")
+            .field("managers", &self.managers)
+            .field("pkgs", &fmt::from_fn(|f| f.debug_list().entries(self.iter()).finish()))
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoke() {
+        let mut pkgs = InstalledPackages::new();
+        pkgs.add("curl", "dpkg", "8.2.0");
+        pkgs.add("gcc-15", "dpkg", "15.2.0");
+
+        let curl = pkgs.get_any_version("curl").unwrap();
+        assert_eq!(curl.name(), "curl");
+        assert_eq!(curl.version(), "8.2.0");
+
+        let gcc = pkgs.get_any_version("gcc-15").unwrap();
+        assert_eq!(gcc.name(), "gcc-15");
+        assert_eq!(gcc.version(), "15.2.0");
     }
 }

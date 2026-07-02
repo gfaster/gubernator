@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, path::PathBuf, sync::Arc, time::Duration};
+use std::{ffi::OsStr, path::PathBuf, sync::{Arc, atomic::*}, time::Duration};
 
 use anyhow::{Context, Result};
 use gub_wire::{ClientMsg, ServerMsg, machine::MachineDescState};
@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("could not read key file {key}", key = key.display()))
     );
 
-    let machine = tokio::task::spawn_blocking(|| gub_wire::machine::MachineDescState::new());
+    let machine = tokio::task::spawn(gub_wire::machine::MachineDescState::new());
 
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_certs.await??)
@@ -134,6 +134,8 @@ async fn main() -> Result<()> {
 
     let machine = machine.await?;
     const BASE_RETRY: Duration = Duration::from_millis(3000);
+    const LINEAR_THREASHOLD: Duration = Duration::from_mins(10);
+    const LINEAR_STEP: Duration = Duration::from_mins(10);
     let mut current_wait = BASE_RETRY;
     loop {
         let last_attempt = Instant::now();
@@ -143,8 +145,10 @@ async fn main() -> Result<()> {
         let elapsed = last_attempt.elapsed();
         if elapsed > current_wait {
             current_wait = BASE_RETRY
-        } else {
+        } else if current_wait < LINEAR_THREASHOLD {
             current_wait *= 2;
+        } else {
+            current_wait += LINEAR_STEP
         }
         eprintln!("retrying in {}s", current_wait.as_secs());
         tokio::time::sleep(current_wait).await
@@ -233,12 +237,12 @@ async fn heartbeat(machine: MachineDescState, outgoing: mpsc::Sender<ClientMsg>)
 async fn scheduler(mut incoming: mpsc::Receiver<ServerMsg>, outgoing: mpsc::Sender<ClientMsg>, sysif: Arc<SystemInterface>) -> Result<()> {
     while let Some(msg) = incoming.recv().await {
         match msg {
-            ServerMsg::Spawn { id, script } => {
+            ServerMsg::Job { id, dispatch } => {
                 let snd = outgoing.clone();
 
                 let sysif = Arc::clone(&sysif);
                 tokio::spawn(async move {
-                    let (success, code) = match job::run_job(&sysif, id, script).await {
+                    let (success, code) = match job::run_job(&sysif, id, dispatch).await {
                         Ok(x) => x,
                         Err(e) => {
                             eprintln!("failed to run job {id}: {e:?}");

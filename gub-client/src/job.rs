@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use futures::StreamExt;
+use gub_wire::job_req::{JobDispatch, WorkingDir};
 use log::{debug, warn};
 
 use tokio::sync::Semaphore;
@@ -78,34 +79,68 @@ fn sd_unit_active_state(state: &str) -> Result<ActiveState> {
 }
 
 
-pub async fn run_job(sif: &SystemInterface, id: u64, script: String) -> Result<(bool, Option<u8>)> {
-    debug!("Starting job {id}: {}", gub_wire::util::truncate_str_debug(&script, 40));
+pub async fn run_job(sif: &SystemInterface, id: u64, dispatch: JobDispatch) -> Result<(bool, Option<u8>)> {
+    debug!("Starting job {id}: {}", gub_wire::util::truncate_debug(&dispatch.exec, 80));
+
+    let JobDispatch {
+        working_dir,
+        exec,
+    } = dispatch;
 
     let permit = sif.job_removed_sem.acquire().await?;
     let mut job_stream = sif.mgr.receive_job_removed().await.context("failed to subscribe to JobRemoved")?;
 
     let unit_name = format!("gubernator_job-{id}.service");
 
+    let mut args = Vec::with_capacity(exec.argv.len() + 1);
+    if let Some(arg0) = exec.argv0 {
+        args.push(arg0);
+    } else {
+        args.push(exec.executable.clone());
+    };
+    args.extend(exec.argv);
+
+    let mut tmp_dir = None;
+    let mut dyn_user = None;
+    let working_dir = match working_dir {
+        // documented as special value
+        WorkingDir::Home => "~",
+        WorkingDir::Root => "/",
+        WorkingDir::ManagedTempdir => {
+            todo!()
+        },
+        WorkingDir::Tempdir => {
+            let td = tmp_dir.insert(tempfile::tempdir()?);
+            td.path().to_str().context("tempdir path is non-utf8")?
+        },
+        WorkingDir::DynamicUser => {
+            dyn_user = Some((String::from("DynamicUser"), true.into()));
+            "~"
+        },
+    };
+
     // enclose all of this in an async block so we can be sure to call async drop on the job
     // stream.
     let res = async {
         let execstart: OwnedValue = Value::try_from([ 
             (
-                "/usr/bin/env",
-                ["/usr/bin/env", "bash", "-c", &script].as_slice(),
+                exec.executable.clone(),
+                args.as_slice(),
                 false, // whether "unclean exit" is failure. It appears to be reversed?
             )
         ].as_slice())?.try_into_owned()?;
         let spawn_job = sif.mgr.start_transient_unit(
             unit_name.clone(),
             String::from("fail"),
-            vec![ 
-                (String::from("Type"), Value::from("exec").try_into_owned()?),
-                (String::from("ExecStart"), execstart),
+            Vec::from_iter([ 
+                Some((String::from("Type"), Value::from("exec").try_into_owned()?)),
+                Some((String::from("ExecStart"), execstart)),
+                Some((String::from("WorkingDirectory"), Value::from(working_dir).try_into_owned()?)),
+                dyn_user,
                 // this appears to be effectively undocumented, but it seems to be what allows us
                 // to make sure it doesn't dissappear
-                (String::from("AddRef"), true.into()),
-            ],
+                Some((String::from("AddRef"), true.into())),
+            ].into_iter().flatten()),
             vec![],
         ).await.context("unit failed to start")?;
 
