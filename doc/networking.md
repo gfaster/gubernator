@@ -14,9 +14,18 @@ of it as possible.
 This means I need a VPN of some sort, probably a overlay network. There are 3
 main possibilities here:
 
-- Manual wireguard
+- Manual Wireguard
 - Tailscale
 - Nebula
 
-Long and short is that wireguard is too hard and tailscale is too proprietary,
-so I'm going to go with nebula.
+Long and short is that Wireguard is too hard[^1] and Tailscale is too proprietary,
+so I'm going to go with Nebula.
+
+I should also have affordance for dealing with LAN ips as well, particularly
+if I want to work without privileges or on Plan 9 (although it might not be too
+bad to port Nebula to Plan 9 since [Tailscale pulled it off][tsp9]).
+
+[^1]: This is mostly with regard to security and key management, as well as IP
+    discovery.
+
+[tsp9]: https://tailscale.com/blog/plan9-port

@@ -5,8 +5,13 @@ This document serves as both explanation and brainstorming.
 When a node connects to the control server, it sends a description of itself
 and its capabilities.
 
-TODO: if a node looses connection and reconnects, it should share information
+TODO: if a node loses connection and reconnects, it should share information
 about its running jobs
+
+TODO: I should also include a general feature set for things such as
+network/filesystem virtualization, Nebula status, ability to impose hard limits
+on process, etc. These should be probably queried at runtime because they'll
+depend on things such as permissions and not just on the host OS.
 
 ```xml
 <machine>
@@ -66,7 +71,7 @@ about its running jobs
     </packages>
 
     <!-- note: using unicode homoglyphs in commands because xml comments -->
-    <!-- run dpkg −−query −−xml -->
+    <!-- run nix-env −−query −−xml -->
     <packages manager="nix-env">
         <pkg>
             <name>neovim</name>

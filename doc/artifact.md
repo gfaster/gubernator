@@ -22,6 +22,22 @@ I want to be able to accommodate all of these at least (TODO: expand me)
 
 ## Methods for read-only files
 
+Non-exhaustive strategies that I might be able to employ for managing files
+that won't (can't) be changed by a job.
+
+### Temporal locality
+
+When dealing with files that will change relatively little between runs such as
+with build systems, we might want to preference a machine that acted as a node
+previously. We could provide a key that can be sent with a new job to allow
+partial updates to those files (e.g. through rsync).
+
+There will be other complications here with regards to locking or key reuse.
+For example, what happens if we request two jobs that both use same key? In
+other words, what if both jobs need different readonly files derivative of an
+earlier job? (This is easy to functionally solve because you can just fallback
+to a full transfer, but solving efficiently sounds like a fun problem).
+
 
 ### Files as part of the request
 
