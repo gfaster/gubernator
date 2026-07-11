@@ -40,10 +40,10 @@ clear-certs:
 	rm -rf certs/mainCA certs/*.key certs/*.crt certs/*.csr
 
 server:
-	cargo run --bin gub-server -- -vvvv -a 127.0.0.1:1832 -c certs/guber-cert.crt -k certs/guber.key
+	cargo run --bin guber-server -- -vvvv -a 127.0.0.1:1832 -c certs/guber-cert.crt -k certs/guber.key
 
 client:
-	cargo run --bin gub-client -- -vvvv -a 127.0.0.1:1832 -d 127.0.0.1 -c certs/mainCA/ca.crt -k certs/client.key -p certs/client-cert.crt
+	cargo run --bin guber-client -- -vvvv -a 127.0.0.1:1832 -d 127.0.0.1 -c certs/mainCA/ca.crt -k certs/client.key -p certs/client-cert.crt
 
 test-openssl:
 	openssl s_client -CAfile certs/mainCA/ca.crt -connect 127.0.0.1:1832

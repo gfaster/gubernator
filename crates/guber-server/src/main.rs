@@ -4,7 +4,7 @@ use std::{
 
 
 use anyhow::{Context, Result};
-use gub_wire::{ServerMsg, job_req::{Exec, JobDescription, JobDispatch, WorkingDir}, machine::{MachineDesc, MachineStatus}, protocol::ClientMsg, sel_expr::MachineSel};
+use guber_wire::{ServerMsg, job_req::{Exec, JobDescription, JobDispatch, WorkingDir}, machine::{MachineDesc, MachineStatus}, protocol::ClientMsg, sel_expr::MachineSel};
 use log::debug;
 use tokio::{io::split, net::TcpListener, sync::oneshot, time::Instant};
 use tokio_rustls::{
@@ -250,7 +250,7 @@ async fn main() -> Result<()> {
                 }
             ).context("failed to establish tls connection")?;
             let (mut reader, mut writer) = split(stream);
-            let desc = gub_wire::recieve_msg::<_, MachineDesc>(&mut reader, &mut buf).await?;
+            let desc = guber_wire::recieve_msg::<_, MachineDesc>(&mut reader, &mut buf).await?;
             let (j_snd, mut j_rcv) = tokio::sync::mpsc::channel(32);
             log::info!("new machine {peer_addr}: {desc:.2?}");
             let client = ClientState {
@@ -274,7 +274,7 @@ async fn main() -> Result<()> {
                         id,
                         dispatch
                     };
-                    if let Err(e) = gub_wire::send_msg(&mut writer, &mut buf, &msg).await {
+                    if let Err(e) = guber_wire::send_msg(&mut writer, &mut buf, &msg).await {
                         eprintln!("{e}");
 
                         // try to record that we're not getting anything more here
@@ -291,7 +291,7 @@ async fn main() -> Result<()> {
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 loop {
-                    let msg = gub_wire::recieve_msg(&mut reader, &mut buf).await;
+                    let msg = guber_wire::recieve_msg(&mut reader, &mut buf).await;
                     let msg: ClientMsg = match msg {
                         Ok(msg) => msg,
                         Err(e) => {

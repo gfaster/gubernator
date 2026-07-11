@@ -1,5 +1,5 @@
 [package]
-name = "gub-server"
+name = "guber-client"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,5 +8,8 @@ anyhow = "1.0.102"
 getopts = "0.2.24"
 tokio = { version = "1.52.1", features = ["full"] }
 tokio-rustls = "0.26.4"
-gub-wire.path = "../gub-wire"
+guber-wire.path = "../guber-wire"
 log = "0.4.29"
+zbus_systemd = { version = "0.26000.0", features = ["systemd1", "zbus-async-tokio"] }
+futures = "0.3.32"
+tempfile = "3.27.0"

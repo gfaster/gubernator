@@ -1,6 +1,4 @@
 [workspace]
 resolver = "2"
 
-members = [
-	"gub-client"
-, "gub-server", "gub-wire"]
+members = [ "crates/guber-client" , "crates/guber-server", "crates/guber-wire"]

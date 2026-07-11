@@ -1,7 +1,7 @@
-use std::{ffi::OsStr, path::PathBuf, sync::{Arc, atomic::*}, time::Duration};
+use std::{ffi::OsStr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use gub_wire::{ClientMsg, ServerMsg, machine::MachineDescState};
+use guber_wire::{ClientMsg, ServerMsg, machine::MachineDescState};
 use log::debug;
 use tokio::{io::{AsyncWriteExt, split}, net::TcpStream, sync::mpsc, time::Instant};
 use tokio_rustls::{TlsConnector, rustls::{self, RootCertStore, pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject}}};
@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("could not read key file {key}", key = key.display()))
     );
 
-    let machine = tokio::task::spawn(gub_wire::machine::MachineDescState::new());
+    let machine = tokio::task::spawn(guber_wire::machine::MachineDescState::new());
 
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_certs.await??)
@@ -169,7 +169,7 @@ async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &Ser
     {
         let desc = machine.get_desc().await;
         debug!("sending machine description: {desc:#?}");
-        gub_wire::send_msg(&mut stream, &mut rbuf, &desc).await?;
+        guber_wire::send_msg(&mut stream, &mut rbuf, &desc).await?;
     }
     stream.flush().await?;
 
@@ -185,7 +185,7 @@ async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &Ser
     // have separate read and write halves to make selecting async safe
     let readhalf = async move {
         loop {
-            let msg = gub_wire::recieve_msg::<_, ServerMsg>(&mut reader, &mut rbuf).await.context("failed to receive message")?;
+            let msg = guber_wire::recieve_msg::<_, ServerMsg>(&mut reader, &mut rbuf).await.context("failed to receive message")?;
             if rsnd.send(msg).await.is_err() {
                 return anyhow::Ok(())
             }
@@ -195,7 +195,7 @@ async fn connect_to_gubernator(connector: TlsConnector, addr: &str, domain: &Ser
     let writehalf = async move {
         let mut buf = Vec::new();
         while let Some(msg) = wrcv.recv().await {
-            gub_wire::send_msg(&mut writer, &mut buf, &msg).await.context("failed to send message")?;
+            guber_wire::send_msg(&mut writer, &mut buf, &msg).await.context("failed to send message")?;
         }
         anyhow::Ok(())
     };

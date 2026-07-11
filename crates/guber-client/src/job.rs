@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use futures::StreamExt;
-use gub_wire::job_req::{JobDispatch, WorkingDir};
+use guber_wire::job_req::{JobDispatch, WorkingDir};
 use log::{debug, warn};
 
 use tokio::sync::Semaphore;
@@ -80,7 +80,7 @@ fn sd_unit_active_state(state: &str) -> Result<ActiveState> {
 
 
 pub async fn run_job(sif: &SystemInterface, id: u64, dispatch: JobDispatch) -> Result<(bool, Option<u8>)> {
-    debug!("Starting job {id}: {}", gub_wire::util::truncate_debug(&dispatch.exec, 80));
+    debug!("Starting job {id}: {}", guber_wire::util::truncate_debug(&dispatch.exec, 80));
 
     let JobDispatch {
         working_dir,

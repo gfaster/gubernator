@@ -358,13 +358,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "gub-client"
+name = "guber-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
  "getopts",
- "gub-wire",
+ "guber-wire",
  "log",
  "tempfile",
  "tokio",
@@ -373,19 +373,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "gub-server"
+name = "guber-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "getopts",
- "gub-wire",
+ "guber-wire",
  "log",
  "tokio",
  "tokio-rustls",
 ]
 
 [[package]]
-name = "gub-wire"
+name = "guber-wire"
 version = "0.1.0"
 dependencies = [
  "libc",
