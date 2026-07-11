@@ -140,6 +140,10 @@ impl ClientState {
     fn get_status(&self) -> MachineStatus {
         self.mstate.lock().unwrap().status.clone()
     }
+
+    fn is_shutdown(&self) -> bool {
+        self.mstate.lock().unwrap().shutdown.is_some()
+    }
 }
 
 struct MutableClientState {
@@ -183,7 +187,7 @@ impl State {
 
         let mut js = tokio::task::JoinSet::new();
         let mut filter = req.machine_sel.validate_machines_filter();
-        for m in machs.iter().filter(|m| filter(&m.desc)) {
+        for m in machs.iter().filter(|m| !m.is_shutdown()).filter(|m| filter(&m.desc)) {
             let (snd, recv) = oneshot::channel();
             let id = self.id_cnt.fetch_add(1, Ordering::Relaxed);
             {
@@ -293,6 +297,8 @@ async fn main() -> Result<()> {
                         Err(e) => {
                             eprintln!("{e}");
 
+                            rclient.mstate.lock().unwrap().shutdown = Some(SystemTime::now());
+
                             // hard to recover here
                             return
                         },
@@ -307,7 +313,7 @@ async fn main() -> Result<()> {
                             rclient.mstate.lock().unwrap().last_heard_from = Instant::now();
                         },
                         ClientMsg::Status(machine_status) => {
-                            debug!("status update from {name}: {machine_status:?}");
+                            debug!("status update from {name}: {machine_status:.3?}");
                             let mut lock = rclient.mstate.lock().unwrap();
                             lock.status = machine_status;
                             lock.last_heard_from = Instant::now();

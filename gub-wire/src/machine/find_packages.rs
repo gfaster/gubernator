@@ -86,12 +86,16 @@ fn index_path() -> PathIndex {
         let Ok(dir) = path.read_dir() else { continue };
         for entry in dir {
             let Ok(entry) = entry else { continue };
-            let Ok(exe) = entry.file_name().into_string() else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() || meta.mode() & 0o111 == 0 {
+                continue
+            }
+            let Ok(exe) = entry.path().into_os_string().into_string() else { continue };
 
             // don't overwrite existing
             ret.entry(exe).or_insert_with(|| entry.path());
         }
     }
 
-    todo!()
+    ret
 }
